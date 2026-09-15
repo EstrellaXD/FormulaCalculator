@@ -18,12 +18,13 @@ pub fn isotope_distribution(
             None => continue,
         };
 
-        // Build single-atom isotope pattern for this element
-        let atom_pattern: Vec<(f64, f64)> = elem
-            .isotopes
-            .iter()
-            .map(|iso| (iso.exact_mass, iso.abundance))
-            .collect();
+        // Single-atom pattern indexed by nucleon shift from the lightest isotope
+        let base = elem.isotopes[0].mass_number;
+        let width = elem.isotopes[elem.isotopes.len() - 1].mass_number - base + 1;
+        let mut atom_pattern = vec![(0.0, 0.0); width as usize];
+        for iso in elem.isotopes {
+            atom_pattern[(iso.mass_number - base) as usize] = (iso.exact_mass, iso.abundance);
+        }
 
         // Raise to power `count` using repeated squaring convolution
         let elem_pattern = power_convolve(&atom_pattern, count);
@@ -52,21 +53,30 @@ pub fn isotope_distribution(
         .collect()
 }
 
-/// Convolve two isotope distributions.
-/// Each distribution is a list of (mass, probability) pairs.
-/// Peaks with the same nominal mass are merged.
+/// Convolve two isotope distributions indexed by nucleon shift.
+/// Each entry is (probability-weighted mean mass, probability). Grouping by the
+/// integer shift, not by rounding exact masses, keeps M+1 and M+2 apart when
+/// the mass defect puts a peak near a .5 Da boundary.
 fn convolve(a: &[(f64, f64)], b: &[(f64, f64)]) -> Vec<(f64, f64)> {
-    let mut result: Vec<(f64, f64)> = Vec::with_capacity(a.len() * b.len());
+    let mut result = vec![(0.0, 0.0); a.len() + b.len() - 1];
 
-    for &(ma, pa) in a {
-        for &(mb, pb) in b {
-            result.push((ma + mb, pa * pb));
+    for (i, &(ma, pa)) in a.iter().enumerate() {
+        for (j, &(mb, pb)) in b.iter().enumerate() {
+            let p = pa * pb;
+            result[i + j].0 += (ma + mb) * p;
+            result[i + j].1 += p;
         }
     }
 
-    merge_by_nominal_mass(&mut result);
-    // Prune tiny peaks to keep convolution tractable
-    result.retain(|&(_, p)| p > 1e-12);
+    for r in &mut result {
+        if r.1 > 0.0 {
+            r.0 /= r.1;
+        }
+    }
+    // Prune the negligible high-mass tail to keep convolution tractable
+    while result.len() > 1 && result[result.len() - 1].1 <= 1e-12 {
+        result.pop();
+    }
     result
 }
 
@@ -88,44 +98,4 @@ fn power_convolve(base: &[(f64, f64)], mut n: u32) -> Vec<(f64, f64)> {
     }
 
     result
-}
-
-/// Merge peaks with the same nominal mass (round to nearest integer).
-/// Masses are averaged weighted by probability; probabilities are summed.
-fn merge_by_nominal_mass(peaks: &mut Vec<(f64, f64)>) {
-    if peaks.is_empty() {
-        return;
-    }
-
-    // Sort by nominal mass
-    peaks.sort_by(|a, b| {
-        (a.0.round() as i64)
-            .cmp(&(b.0.round() as i64))
-            .then(a.0.partial_cmp(&b.0).unwrap())
-    });
-
-    let mut merged: Vec<(f64, f64)> = Vec::new();
-    let mut current_nominal = peaks[0].0.round() as i64;
-    let mut mass_sum = 0.0_f64;
-    let mut prob_sum = 0.0_f64;
-
-    for &(mass, prob) in peaks.iter() {
-        let nominal = mass.round() as i64;
-        if nominal == current_nominal {
-            mass_sum += mass * prob;
-            prob_sum += prob;
-        } else {
-            if prob_sum > 0.0 {
-                merged.push((mass_sum / prob_sum, prob_sum));
-            }
-            current_nominal = nominal;
-            mass_sum = mass * prob;
-            prob_sum = prob;
-        }
-    }
-    if prob_sum > 0.0 {
-        merged.push((mass_sum / prob_sum, prob_sum));
-    }
-
-    *peaks = merged;
 }
