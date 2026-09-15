@@ -76,9 +76,15 @@ impl fmt::Display for FormulaCandidate {
 }
 
 pub fn build_formula_string(composition: &[(&str, u32)]) -> String {
-    let order = ["C", "H", "N", "O", "P", "S", "F", "Cl", "Br", "I", "Si"];
+    // Hill order: C, H, then alphabetical; alphabetical throughout when there is no C
+    let has_c = composition.iter().any(|&(el, n)| el == "C" && n > 0);
+    let order: &[&str] = if has_c {
+        &["C", "H", "Br", "Cl", "F", "I", "N", "O", "P", "S", "Si"]
+    } else {
+        &["Br", "C", "Cl", "F", "H", "I", "N", "O", "P", "S", "Si"]
+    };
     let mut s = String::new();
-    for &sym in &order {
+    for &sym in order {
         if let Some(&(_, count)) = composition.iter().find(|(el, _)| *el == sym) {
             if count > 0 {
                 s.push_str(sym);

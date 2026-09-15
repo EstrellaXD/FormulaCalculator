@@ -175,3 +175,99 @@ fn test_no_rules_mode() {
         "Disabling rules should give at least as many results"
     );
 }
+
+#[test]
+fn test_lipid_with_large_mass_defect_passes_rules() {
+    // PC(34:1): exact-mass rounding gives nominal 760 (even) with N=1
+    assert_formula_found(759.57781, "C42H82NO8P", 2.0);
+}
+
+#[test]
+fn test_perfluorinated_compound_found() {
+    // PFOA: 15 F drive the partial DBE negative before C is assigned
+    let results = search_for(413.97370, 2.0, "CHNOPSF");
+    assert!(results.iter().any(|c| c.formula_string == "C8HF15O2"));
+}
+
+#[test]
+fn test_polychlorinated_compound_found() {
+    // Tetrachloroethylene: Cl/C = 2 is the extended-range limit
+    let results = search_for(163.87541, 2.0, "CHNOPSCl");
+    assert!(results.iter().any(|c| c.formula_string == "C2Cl4"));
+}
+
+#[test]
+fn test_no_hydrogen_when_not_in_element_list() {
+    let results = search_for(180.06339, 5.0, "CNO");
+    assert!(results.iter().all(|c| c.composition.iter().all(|&(s, _)| s != "H")));
+}
+
+#[test]
+fn test_max_results_keeps_best_candidate() {
+    let elem_list = elements::parse_element_string("CHNOPS");
+    let mut constraints = bounds::default_constraints(&elem_list);
+    bounds::compute_bounds(759.57781, 2.0, &mut constraints);
+    let params = |max_results| SearchParams {
+        target_mass: 759.57781,
+        tolerance_ppm: 2.0,
+        element_constraints: constraints.clone(),
+        adduct: None,
+        apply_rules: false,
+        strict_rules: false,
+        max_results,
+        calc_isotopes: false,
+    };
+    let best_of_all = search::search(&params(100_000))[0].mass_error_da.abs();
+    assert_eq!(search::search(&params(1))[0].mass_error_da.abs(), best_of_all);
+}
+
+#[test]
+fn test_adduct_masses_match_reference() {
+    use mfcalc::adduct::find_adduct;
+    // Ion masses: atom/molecule mass minus electron (AME2016 via pyteomics)
+    for (name, reference) in [("[M+K]+", 38.963_158_10), ("[M+NH4]+", 18.033_825_55), ("[M+Na]+", 22.989_220_70)] {
+        let adj = find_adduct(name).unwrap().mass_adjustment;
+        assert!((adj - reference).abs() < 1e-6, "{name}: {adj} vs {reference}");
+    }
+}
+
+#[test]
+fn test_isotope_peaks_grouped_by_nucleon_shift() {
+    // C34H69ClO2 monoisotopic mass 544.49861 sits at a .5 rounding boundary
+    let elem_refs = elements::parse_element_string("CHOCl");
+    let pattern = isotope::isotope_distribution(&[("C", 34), ("H", 69), ("Cl", 1), ("O", 2)], &elem_refs);
+    let shifts: Vec<f64> = pattern.iter().take(4).map(|p| p.mass - 544.49861).collect();
+    assert!(
+        shifts.iter().enumerate().all(|(k, s)| (s - k as f64 * 1.0017).abs() < 0.01),
+        "shifts {shifts:?}"
+    );
+}
+
+fn passes_loose_rules(composition: Vec<(&'static str, u32)>) -> bool {
+    let candidate = mfcalc::types::FormulaCandidate {
+        dbe: mfcalc::types::calculate_dbe(&composition),
+        formula_string: mfcalc::types::build_formula_string(&composition),
+        monoisotopic_mass: composition
+            .iter()
+            .map(|&(s, n)| n as f64 * elements::get_element(s).unwrap().monoisotopic_mass)
+            .sum(),
+        composition,
+        mass_error_da: 0.0,
+        mass_error_ppm: 0.0,
+        isotope_pattern: None,
+        adduct_name: None,
+        observed_mz: None,
+    };
+    mfcalc::rules::validate(&candidate, false)
+}
+
+// Kind & Fiehn 2007, Table 2 extended range: P/C 0-2, S/C 0-3
+#[test]
+fn test_rules_accept_sulfur_ratio_within_extended_range() {
+    assert!(passes_loose_rules(vec![("C", 2), ("H", 2), ("S", 5)]));
+}
+
+#[test]
+fn test_rules_reject_phosphorus_ratio_above_extended_range() {
+    assert!(!passes_loose_rules(vec![("C", 1), ("H", 3), ("O", 3), ("P", 3)]));
+}

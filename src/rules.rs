@@ -1,3 +1,4 @@
+use crate::elements::get_element;
 use crate::types::FormulaCandidate;
 
 /// Validate a candidate formula against the Seven Golden Rules.
@@ -17,7 +18,7 @@ fn rdbe_check(candidate: &FormulaCandidate) -> bool {
     (twice_dbe - twice_dbe.round()).abs() < 1e-6
 }
 
-/// Rule 2: Element ratio constraints (Kind & Fiehn 2007, Table 1)
+/// Rule 2: Element ratio constraints (Kind & Fiehn 2007, Table 2)
 fn element_ratio_check(candidate: &FormulaCandidate, strict: bool) -> bool {
     let get = |sym: &str| -> u32 {
         candidate
@@ -35,12 +36,16 @@ fn element_ratio_check(candidate: &FormulaCandidate, strict: bool) -> bool {
     let cf = c as f64;
 
     let checks: &[(&str, f64, f64, f64, f64)] = &[
-        //  element, loose_min, loose_max, strict_min, strict_max
+        //  element, loose_min, loose_max, strict_min, strict_max (extended / common range)
         ("H", 0.1, 6.0, 0.2, 3.1),
+        ("F", 0.0, 6.0, 0.0, 1.5),
+        ("Cl", 0.0, 2.0, 0.0, 0.8),
+        ("Br", 0.0, 2.0, 0.0, 0.8),
         ("N", 0.0, 4.0, 0.0, 1.3),
         ("O", 0.0, 3.0, 0.0, 1.2),
-        ("P", 0.0, 6.0, 0.0, 0.3),
-        ("S", 0.0, 2.0, 0.0, 0.8),
+        ("P", 0.0, 2.0, 0.0, 0.3),
+        ("S", 0.0, 3.0, 0.0, 0.8),
+        ("Si", 0.0, 1.0, 0.0, 0.5),
     ];
 
     for &(sym, loose_min, loose_max, strict_min, strict_max) in checks {
@@ -75,59 +80,18 @@ fn nitrogen_rule_check(candidate: &FormulaCandidate) -> bool {
     };
 
     let n_count = get("N");
-    let nominal_mass = candidate.monoisotopic_mass.round() as u64;
+    // Nominal mass from mass numbers: rounding the exact mass flips parity once the
+    // accumulated mass defect exceeds 0.5 Da (e.g. C42H82NO8P, 759.578 Da).
+    let nominal_mass: u32 = candidate
+        .composition
+        .iter()
+        .map(|&(s, n)| n * get_element(s).map_or(0, |e| e.isotopes[0].mass_number))
+        .sum();
 
-    // If N is even, nominal mass should be even for typical organic molecules.
-    // If N is odd, nominal mass should be odd.
-    // This is a soft check — only flag clear violations.
     let mass_is_odd = nominal_mass % 2 == 1;
     let n_is_odd = n_count % 2 == 1;
 
     // For standard organic molecules (C, H, N, O, P, S):
     // Nitrogen rule: M is odd iff N count is odd
     mass_is_odd == n_is_odd
-}
-
-/// Partial RDBE check for pruning during search.
-/// Given partial composition (some elements assigned, some not yet),
-/// check if DBE can still land in a valid range.
-///
-/// `assigned` = [(symbol, valence, count)] for already-assigned elements
-/// `remaining_h_max` = maximum H atoms still possible
-///
-/// Returns false if the branch is impossible.
-pub fn partial_dbe_feasible(
-    assigned: &[(&str, i32, u32)],
-    remaining_h_max: u32,
-) -> bool {
-    // Compute partial DBE from assigned elements
-    let mut dbe = 1.0_f64;
-    for &(_, valence, count) in assigned {
-        dbe += count as f64 * (valence as f64 - 2.0) / 2.0;
-    }
-
-    // With remaining H (valence=1), each H decreases DBE by 0.5.
-    // Minimum possible final DBE = dbe - remaining_h_max * 0.5
-    // Maximum possible final DBE = dbe (if no more H added, ignoring other elements)
-    // For validity we need final DBE >= -0.5
-    // Best case (lowest DBE): all remaining H used → dbe - remaining_h_max * 0.5 >= -0.5?
-    // That's always potentially satisfiable if current dbe isn't impossibly negative.
-    // Worst case: minimum DBE with max H must be achievable: dbe - max_h * 0.5 can be >= -0.5
-
-    // Current DBE must not be so low that even adding 0 more H can't fix it.
-    // Actually, the useful check is: current partial DBE shouldn't be so HIGH that
-    // even max H can't bring it to a reasonable range, and shouldn't be so LOW
-    // that it's already below -0.5 without any more negative contributors.
-
-    // Simple check: current partial DBE (before H) shouldn't be impossibly negative
-    // because H only makes it more negative.
-    // If dbe is already < -0.5 and we haven't added H yet, adding H only lowers it more
-    // — but we might have H already in `assigned`. This check is mainly useful when
-    // we've assigned non-H elements and want to know if any H count will work.
-    let min_final_dbe = dbe - remaining_h_max as f64 * 0.5;
-    let max_final_dbe = dbe;
-
-    // DBE must be >= -0.5 → max_final_dbe >= -0.5
-    // DBE shouldn't be absurdly large (practical limit ~40 for 1000 Da organics)
-    max_final_dbe >= -0.5 && min_final_dbe <= 50.0
 }

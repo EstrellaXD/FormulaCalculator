@@ -78,7 +78,7 @@ pub static OXYGEN: Element = Element {
     isotopes: O_ISOTOPES, monoisotopic_mass: 15.994_914_619_56,
 };
 pub static PHOSPHORUS: Element = Element {
-    symbol: "P", atomic_number: 15, valence: 5,
+    symbol: "P", atomic_number: 15, valence: 3, // RDBE convention (Kind & Fiehn eq. 1)
     isotopes: P_ISOTOPES, monoisotopic_mass: 30.973_761_63,
 };
 pub static SULFUR: Element = Element {

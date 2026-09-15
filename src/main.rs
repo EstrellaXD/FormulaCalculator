@@ -7,7 +7,8 @@ use mfcalc::elements;
 use mfcalc::isotope;
 use mfcalc::output::{self, OutputFormat};
 use mfcalc::search;
-use mfcalc::types::{IonMode, SearchParams};
+use mfcalc::types::{FormulaCandidate, IonMode, SearchParams};
+use rayon::prelude::*;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -59,7 +60,7 @@ struct Cli {
     #[arg(long)]
     batch: Option<String>,
 
-    /// Use parallel search (split by C count)
+    /// Process masses in parallel
     #[arg(long)]
     parallel: bool,
 }
@@ -124,7 +125,7 @@ fn main() {
         std::process::exit(1);
     }
 
-    for (mass_idx, &input_mass) in masses.iter().enumerate() {
+    let candidates_for = |&input_mass: &f64| {
         // Collect candidates across all adducts for this mass, then merge + sort
         let mut all_candidates = Vec::new();
 
@@ -152,27 +153,13 @@ fn main() {
                 calc_isotopes: cli.isotope,
             };
 
-            let mut candidates = if cli.parallel {
-                search::search_parallel(&params)
-            } else {
-                search::search(&params)
-            };
+            let mut candidates = search::search(&params);
 
             // Tag each candidate with its adduct and observed m/z
             for c in &mut candidates {
                 if let Some(a) = adduct_opt {
                     c.adduct_name = Some(a.name.to_string());
                     c.observed_mz = Some(adduct::neutral_to_mz(c.monoisotopic_mass, a));
-                }
-            }
-
-            // Calculate isotope patterns if requested
-            if cli.isotope {
-                let elem_refs: Vec<&'static mfcalc::types::Element> =
-                    elem_list.iter().copied().collect();
-                for c in &mut candidates {
-                    c.isotope_pattern =
-                        Some(isotope::isotope_distribution(&c.composition, &elem_refs));
                 }
             }
 
@@ -188,6 +175,23 @@ fn main() {
         });
         all_candidates.truncate(cli.max_results);
 
+        // Calculate isotope patterns for the kept candidates only
+        if cli.isotope {
+            for c in &mut all_candidates {
+                c.isotope_pattern = Some(isotope::isotope_distribution(&c.composition, &elem_list));
+            }
+        }
+        all_candidates
+    };
+
+    // Parallelize across masses; results are printed in input order
+    let results: Vec<Vec<FormulaCandidate>> = if cli.parallel {
+        masses.par_iter().map(candidates_for).collect()
+    } else {
+        masses.iter().map(candidates_for).collect()
+    };
+
+    for (mass_idx, (&input_mass, all_candidates)) in masses.iter().zip(&results).enumerate() {
         // Print header
         let abs_tol = input_mass * cli.ppm * 1e-6;
         let elem_syms: Vec<&str> = elem_list.iter().map(|e| e.symbol).collect();
@@ -214,7 +218,7 @@ fn main() {
         println!("Elements: {} | Rules: {}", elem_syms.join(" "), rules_str);
         println!();
 
-        output::print_results(&all_candidates, output_format, cli.isotope, show_adduct_column);
+        output::print_results(all_candidates, output_format, cli.isotope, show_adduct_column);
 
         if mass_idx + 1 < masses.len() {
             println!("---");

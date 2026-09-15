@@ -1,10 +1,13 @@
+use crate::elements::ELECTRON_MASS;
 use crate::types::{Adduct, IonMode};
+
+// Cation adjustments = neutral atom/molecule mass minus one electron
 
 pub static ADDUCTS_POSITIVE: &[Adduct] = &[
     Adduct { name: "[M+H]+",   mass_adjustment: 1.007_276_47,  charge: 1, mode: IonMode::Positive },
-    Adduct { name: "[M+Na]+",  mass_adjustment: 22.989_218_02,  charge: 1, mode: IonMode::Positive },
-    Adduct { name: "[M+K]+",   mass_adjustment: 38.963_706_68,  charge: 1, mode: IonMode::Positive },
-    Adduct { name: "[M+NH4]+", mass_adjustment: 18.034_164_07,  charge: 1, mode: IonMode::Positive },
+    Adduct { name: "[M+Na]+",  mass_adjustment: 22.989_769_28 - ELECTRON_MASS, charge: 1, mode: IonMode::Positive },
+    Adduct { name: "[M+K]+",   mass_adjustment: 38.963_706_49 - ELECTRON_MASS, charge: 1, mode: IonMode::Positive },
+    Adduct { name: "[M+NH4]+", mass_adjustment: 14.003_074_004_8 + 4.0 * 1.007_825_032_07 - ELECTRON_MASS, charge: 1, mode: IonMode::Positive },
     Adduct { name: "[M+2H]2+", mass_adjustment: 2.014_552_94,   charge: 2, mode: IonMode::Positive },
 ];
 
